@@ -7,7 +7,7 @@ description: "Control ESC/POS thermal receipt printers (Epson TM-T20/T88/TM-m30,
 
 `python-escpos` is a Python library and CLI for driving ESC/POS-compatible thermal receipt printers (Epson TM-T20/T88/III/TM-m30II, Star Micronics, and many others). The CLI — invoked as `python-escpos` — mirrors the library's ESC/POS commands as subcommands, so you can print text, barcodes, QR codes, images, cut paper, and kick cash drawers directly from a shell or script **without writing Python code**.
 
-The CLI **requires a YAML configuration file** that defines which printer to use and how to connect to it. Every subcommand loads this config, instantiates the printer, executes the command, and exits. There is no interactive session.
+The CLI normally reads a YAML configuration file that defines which printer to use, but this skill's auto-discovery workflow (Step 3) can detect printers via USB, mDNS/Bonjour, serial, and CUPS, then auto-generate the config automatically — making the user's life as easy as possible.
 
 This skill was built from the context7 llms.txt documentation, verified against the actual CLI source (`cli.py`), and **tested on physical hardware** (Epson TM-m30II, USB). Where the documentation differs from tested reality, this skill reflects what actually works and notes known bugs.
 
@@ -82,15 +82,16 @@ ESC/POS thermal printers are a **natural canvas for ASCII art and text-based art
 
 `text`, `block_text`, `qr`, `barcode`, `image`, `cut`, `charcode` (with valid codepages), `set` (alignment/width/height/density/invert/smooth/flip only), `hw`, `control`, `panel_buttons`, `raw`, `version`, `version_extended`
 
-This skill walks through the full workflow: install → identify printer → write config → run commands → troubleshoot.
+This skill walks through the full workflow: install → auto-discover printer → auto-generate config → run commands → troubleshoot. The agent should handle everything automatically — only ask the user if discovery finds nothing.
 
 ## When to Use
 
 - User wants to print text, barcodes, QR codes, or images to a thermal/receipt printer from the command line.
 - User mentions `python-escpos`, ESC/POS, or a specific printer model (Epson TM-T20, TM-T88, TM-TIII, TM-m30II, Star, etc.).
-- User wants to set up a `config.yaml` for a USB, serial, network, or CUPS printer.
+- User just connected a printer and wants to start printing — run auto-discovery first, auto-generate config, then print.
 - User wants to script receipt printing from a shell script.
 - User wants to kick a cash drawer, cut paper, or send raw ESC/POS bytes.
+- User wants to discover what printers are available on the network or via USB.
 
 **Don't use for:**
 - Printing to standard desktop printers via CUPS/lp on regular paper — this is specifically for ESC/POS thermal protocols.
@@ -132,70 +133,87 @@ eval "$(register-python-argcomplete python-escpos)"
 
 Add this to your `~/.bashrc` or `~/.zshrc` for persistence. Requires the `argcomplete` package (`pip install argcomplete`). If it's missing, the CLI still works — you just don't get tab completion.
 
-### Step 3 — Identify your printer
+### Step 3 — Auto-discover the printer (no config needed yet)
 
-You need to know the connection type and parameters before writing the config.
+**The config file is OPTIONAL.** The agent should attempt to auto-discover any connected ESC/POS printer before asking the user for manual configuration. Run the discovery script below — it probes USB, network (mDNS/Bonjour), serial ports, and CUPS, then reports what it found.
 
-#### USB printers
+#### Discovery script
 
-Find the Vendor ID and Product ID:
-- **macOS:** `system_profiler SPUSBDataType | grep -B2 -A8 "0x04b8"` (or search for your printer manufacturer name)
-- **Linux:** `lsusb`
+Run this Python one-liner to probe all interfaces at once. It requires `zeroconf` for network discovery (`pip install zeroconf`);USB/serial/CUPS discovery use only stdlib + system tools.
 
-```bash
-# macOS example output:
-#   Product ID: 0x0e2a
-#   Vendor ID: 0x04b8  (Seiko Epson Corp.)
-#   Manufacturer: EPSON
-#   1284 Device ID: MFG:EPSON;CMD:ESC/POS;MDL:TM-m30II;CLS:PRINTER;DES:EPSON TM-m30II
+```python
+python3 -c "
+import subprocess, re, glob, os, time
 
-# Linux example:
-# Bus 001 Device 005: ID 04b8:0202 Seiko Epson Corp. TM-T88III
-#                      ^^^^ ^^^^
-#                   vendor_id product_id
+# --- USB ---
+print('=== USB ===')
+text = subprocess.run(['system_profiler', 'SPUSBDataType'], capture_output=True, text=True).stdout if os.uname().sysname == 'Darwin' else subprocess.run(['lsusb'], capture_output=True, text=True).stdout
+for m in re.finditer(r'(?:Vendor ID|ID)\s*:?\s*0x([0-9a-fA-F]+).*?(?:Product ID|:)\s*0x([0-9a-fA-F]+)', text, re.S):
+    vid, pid = '0x'+m.group(1), '0x'+m.group(2)
+    esc = 'CMD:ESC' in text or 'ESC/POS' in text
+    print(f'  USB printer: idVendor={vid} idProduct={pid} escpos={esc}')
+
+# --- Network (mDNS/Bonjour) ---
+print('=== Network (mDNS) ===')
+try:
+    from zeroconf import Zeroconf, ServiceBrowser
+    zc = Zeroconf(); found = []
+    class L:
+        def add_service(self, zc, t, n):
+            info = zc.get_service_info(t, n)
+            if info:
+                a = info.parsed_addresses()
+                found.append((n, a[0] if a else '?', info.port))
+        def remove_service(self, *a): pass
+        def update_service(self, *a): pass
+    for svc in ['_printer._tcp.local.', '_ipp._tcp.local.', '_pdl-datastream._tcp.local.']:
+        ServiceBrowser(zc, svc, L())
+    time.sleep(3); zc.close()
+    for n, ip, port in found:
+        print(f'  Network printer: {n} @ {ip}:{port}')
+    if not found: print('  No network printers found')
+except ImportError:
+    print('  zeroconf not installed (pip install zeroconf)')
+
+# --- Serial ---
+print('=== Serial ===')
+ports = sorted(set(glob.glob('/dev/ttyUSB*') + glob.glob('/dev/tty.usbserial*') + glob.glob('/dev/ttyS*')))
+for p in ports: print(f'  {p}')
+if not ports: print('  No serial ports found')
+
+# --- CUPS ---
+print('=== CUPS ===')
+try:
+    r = subprocess.run(['lpstat', '-p'], capture_output=True, text=True, timeout=5)
+    for line in r.stdout.strip().split('\n'):
+        m = re.match(r'printer\s+(\S+)\s+is', line)
+        if m:
+            name = m.group(1)
+            esc = bool(re.search(r'epson|star|tm[._-]?[tmp]|thermal|receipt', name, re.I))
+            print(f'  {name}{\" <-- ESC/POS likely\" if esc else \"\"}')
+    if not r.stdout.strip(): print('  No CUPS printers')
+except Exception as e:
+    print(f'  CUPS error: {e}')
+"
 ```
 
-The IDs are `0x04b8` (vendor) and `0x0e2a` / `0x0202` (product). Most Epson printers use `0x04b8` as the vendor ID.
+#### What to do with discovery results
 
-**Linux udev rule (recommended):** By default, USB devices require root. Create a udev rule so non-root users can access the printer:
+| Discovery result | Action |
+|---|---|
+| **USB printer found** (vendor `0x04b8` or `CMD:ESC/POS` in device ID) | Auto-generate USB config (see Step 4) |
+| **Network printer found** via mDNS | Auto-generate network config with discovered IP + port |
+| **Serial port found** (`/dev/ttyUSB*`, `/dev/tty.usbserial*`) | Ask user for baud rate (default 9600), auto-generate serial config |
+| **CUPS printer with ESC/POS-like name** (e.g. `EPSON_TM_m30II`) | Auto-generate `cupsprinter` config with that name, OR use `lp` type |
+| **Nothing found** | Ask user to connect the printer, or provide connection details manually |
 
-```bash
-sudo tee /etc/udev/rules.d/99-escpos.rules <<EOF
-SUBSYSTEM=="usb", ATTRS{idVendor}=="04b8", ATTRS{idProduct}=="0e2a", MODE="0664", GROUP="dialout"
-EOF
-sudo udevadm control --reload
-sudo udevadm trigger
-```
+**Key insight:** Even when the printer is physically disconnected, CUPS may still list it (the queue persists). A CUPS-listed ESC/POS printer name like `EPSON_TM_m30II` can be used directly with `type: cupsprinter` — CUPS handles the connection when the printer comes back online.
 
-Add your user to the `dialout` group if not already: `sudo usermod -aG dialout $USER` (log out/in to apply).
+### Step 4 — Auto-generate the config file (if needed)
 
-**macOS:** No udev rules needed. USB access works without root on macOS.
+Based on discovery results from Step 3, the agent should **automatically write the `config.yaml`** to the default platform path. Only ask the user for details that couldn't be auto-detected.
 
-#### Serial printers
-
-Identify the device path:
-- Linux: `/dev/ttyUSB0`, `/dev/ttyS0`, etc. Check with `ls /dev/ttyUSB* /dev/ttyS*`.
-- macOS: `/dev/tty.usbserial-*`. Check with `ls /dev/tty.usbserial*`.
-- Windows: `COM1`, `COM2`, etc.
-
-You also need to know baud rate (commonly 9600 or 19200), data bits (8), parity (N), and stop bits (1).
-
-#### Network printers
-
-Find the printer's IP address (e.g., `192.168.1.100`). The default ESC/POS network port is `9100`.
-
-#### File/LP printers
-
-- **File:** The device node, e.g. `/dev/usb/lp0` (Linux). Check with `ls /dev/usb/lp*`.
-- **LP:** Uses the UNIX `lp` command to talk to CUPS. The printer must be configured in CUPS. List with `lpstat -p`.
-
-#### CUPS printers
-
-The printer must be configured in the CUPS administration interface (http://localhost:631). List with `lpstat -p`.
-
-### Step 4 — Create the configuration file
-
-The CLI reads a YAML file named `config.yaml`. By default, it looks in the platform's user config directory:
+#### Config file location
 
 | Platform | Default path |
 |---|---|
@@ -203,46 +221,96 @@ The CLI reads a YAML file named `config.yaml`. By default, it looks in the platf
 | macOS | `~/Library/Application Support/python-escpos/config.yaml` |
 | Windows | `C:\Users\<user>\AppData\Local\python-escpos\config.yaml` |
 
-You can place it there, or pass a custom path with `-c`/`--config` on any command.
+The agent should create this file automatically. Only ask the user if discovery found nothing.
 
-The file must have a top-level `printer` key with a `type` field and connection-specific parameters. The `type` is case-insensitive and maps to a printer class.
+#### Auto-generation by printer type
 
-#### Config file structure
+**USB (auto-detected vendor/product IDs):**
+```yaml
+printer:
+  type: usb
+  idVendor: 0x04b8        # from discovery
+  idProduct: 0x0e2a      # from discovery
+  profile: default
+```
+
+**Network (auto-detected IP/port from mDNS):**
+```yaml
+printer:
+  type: network
+  host: 192.168.1.100    # from mDNS discovery
+  port: 9100             # from mDNS, or default 9100
+  profile: default
+```
+
+**Serial (auto-detected port, ask for baud rate if unknown):**
+```yaml
+printer:
+  type: serial
+  devfile: /dev/ttyUSB0  # from discovery
+  baudrate: 9600          # ask user if unknown; common: 9600, 19200, 38400
+  bytesize: 8
+  parity: N
+  stopbits: 1
+  timeout: 1.0
+  profile: default
+```
+
+**CUPS (auto-detected printer name):**
+```yaml
+printer:
+  type: cupsprinter
+  printer_name: EPSON_TM_m30II   # from lpstat discovery
+  profile: default
+```
+
+**LP (CUPS via lp command — simplest, no USB deps needed):**
+```yaml
+printer:
+  type: lp
+  profile: default
+```
+
+**No printer found (ask user):**
+```yaml
+printer:
+  type: dummy            # fallback for testing
+```
+
+#### Config file structure (reference)
+
+The file must have a top-level `printer` key with a `type` field and connection-specific parameters. The `type` is case-insensitive.
 
 ```yaml
 printer:
   type: <printer_type>     # Required. One of: usb, serial, network, file, dummy, cupsprinter, lp, win32raw
-  profile: default         # Optional. Printer capabilities profile (see below)
+  profile: default         # Optional. Printer capabilities profile
   # ... type-specific parameters below
 ```
 
 #### Profile selection
 
-The `profile` parameter tells python-escpos which features the printer supports (barcode types, cut modes, code pages, paper width). Available profiles include: `TM-T20II`, `TM-T88II`, `TM-T88III`, `TM-T88IV`, `TM-T88V`, `TM-L90`, `TM-P80`, `TM-U220`, `default`.
+The `profile` parameter tells python-escpos which features the printer supports. Available profiles: `TM-T20II`, `TM-T88II`, `TM-T88III`, `TM-T88IV`, `TM-T88V`, `TM-L90`, `TM-P80`, `TM-U220`, `default`.
 
-**If your exact printer model isn't in the capabilities DB** (e.g. TM-m30II), use `profile: default`. This works for all basic operations. The only limitation: center-alignment of barcodes/images won't work (warning: "The media.width.pixel field of the printer profile is not set"), but left/right alignment and all print operations work fine.
+**If your exact printer model isn't in the capabilities DB** (e.g. TM-m30II), use `profile: default`. This works for all basic operations. Center-alignment of barcodes/images won't work (harmless warning), but all print operations work fine.
 
 To list all available profiles:
 ```bash
 python3 -c "from escpos.capabilities import CAPABILITIES; print(sorted(CAPABILITIES['profiles'].keys()))"
 ```
 
-#### USB config example
+#### Manual config examples (fallback if auto-discovery finds nothing)
 
+##### USB
 ```yaml
 printer:
   type: usb
   idVendor: 0x04b8
-  idProduct: 0x0e2a          # Replace with your printer's product ID
-  # Optional advanced USB params (defaults shown):
-  # in_ep: 0x82
-  # out_ep: 0x01
-  # timeout: 0
+  idProduct: 0x0e2a
   profile: default
 ```
 
-#### Serial config example
-
+##### Serial
 ```yaml
 printer:
   type: serial
@@ -252,25 +320,18 @@ printer:
   parity: N
   stopbits: 1
   timeout: 1.0
-  # Flow control (optional):
-  # dsrdtr: true
-  # xonxoff: false
   profile: default
 ```
 
-#### Network config example
-
+##### Network
 ```yaml
 printer:
   type: network
   host: 192.168.1.100
-  # port: 9100       # Optional, default 9100
-  # timeout: 60      # Optional, default 60
   profile: default
 ```
 
-#### File config example
-
+##### File (raw device node)
 ```yaml
 printer:
   type: file
@@ -278,40 +339,46 @@ printer:
   profile: default
 ```
 
-#### Dummy config (testing without a printer)
-
+##### Dummy (testing without hardware)
 ```yaml
 printer:
   type: dummy
 ```
 
-The Dummy printer captures all ESC/POS output in memory without sending to hardware. Useful for testing command sequences.
-
-#### LP config (CUPS via lp command)
-
+##### LP (CUPS via lp command)
 ```yaml
 printer:
   type: lp
-  # host: localhost    # Optional, for remote CUPS server
-  # The printer name is auto-detected; or specify:
-  # printer_name: MyReceiptPrinter
 ```
 
-#### CUPS config
-
+##### CUPS
 ```yaml
 printer:
   type: cupsprinter
-  # printer_name: MyReceiptPrinter   # Optional, auto-detected if omitted
+  printer_name: MyReceiptPrinter
 ```
 
-#### Win32Raw config (Windows only)
-
+##### Win32Raw (Windows only)
 ```yaml
 printer:
   type: win32raw
   printer_name: "My Receipt Printer"
 ```
+
+#### Linux USB permissions (only if USB and access fails)
+
+If USB discovery finds the printer but printing fails with permission errors, create a udev rule:
+
+```bash
+sudo tee /etc/udev/rules.d/99-escpos.rules <<EOF
+SUBSYSTEM=="usb", ATTRS{idVendor}=="04b8", ATTRS{idProduct}=="0e2a", MODE="0664", GROUP="dialout"
+EOF
+sudo udevadm control --reload
+sudo udevadm trigger
+sudo usermod -aG dialout $USER  # log out/in to apply
+```
+
+**macOS:** No udev rules needed. USB access works without root.
 
 ### Step 5 — Verify installation and driver usability
 
@@ -334,7 +401,7 @@ This prints python-escpos version, Python version, platform, and whether each dr
 
 ### Step 6 — Run CLI commands
 
-With the config in place, every command follows this pattern:
+With the config in place (auto-generated in Step 4, or manually created), every command follows this pattern:
 
 ```bash
 python-escpos [-c <config_path>] <subcommand> [options]
