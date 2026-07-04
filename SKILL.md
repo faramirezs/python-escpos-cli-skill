@@ -11,6 +11,62 @@ The CLI **requires a YAML configuration file** that defines which printer to use
 
 This skill was built from the context7 llms.txt documentation, verified against the actual CLI source (`cli.py`), and **tested on physical hardware** (Epson TM-m30II, USB). Where the documentation differs from tested reality, this skill reflects what actually works and notes known bugs.
 
+## Artistic Expression on Thermal Printers
+
+ESC/POS thermal printers are a **natural canvas for ASCII art and text-based art**. The monochrome, fixed-width, dot-matrix medium is uniquely suited to creative expression — this is not a bug, it's the medium's aesthetic. When printing for anything beyond a plain receipt, **prefer artistic expression over plain utility**.
+
+### Why ASCII art works so well here
+
+- The printer is inherently **1-bit monochrome** — black dots on white paper. ASCII art maps directly to this constraint (inked characters vs whitespace).
+- **Fixed-width fonts** (Font A and Font B) mean every character occupies the same grid cell — perfect for aligning ASCII art columns.
+- **80mm paper** gives ~48 characters per line in Font A, or ~64 in Font B. This is the classic terminal width ASCII art was designed for.
+- The medium is **ephemeral** — receipts are meant to be discarded. This invites experimentation without commitment.
+
+### Recommended techniques
+
+1. **ASCII art headers and dividers** — Use box-drawing characters, decorative borders, and figlet-style banners instead of plain `====` separators:
+   ```bash
+   python-escpos text --txt "  +-------------------+"
+   python-escpos text --txt "  |  WELCOME TO CAFE  |"
+   python-escpos text --txt "  |    MILANO ROSA    |"
+   python-escpos text --txt "  +-------------------+"
+   ```
+
+2. **Text-based borders and frames** — Box-drawing characters (`+`, `-`, `|`, `*`) create visual structure that plain text lacks:
+   ```bash
+   python-escpos text --txt "+-------------------------------------------+"
+   python-escpos text --txt "|  Coffee..............................$3.50  |"
+   python-escpos text --txt "|  Bagel...............................$2.00  |"
+   python-escpos text --txt "|  TOTAL...............................$5.50  |"
+   python-escpos text --txt "+-------------------------------------------+"
+   ```
+
+3. **Figlet / banner text** — Generate large ASCII text for headers using `figlet` or manual block text:
+   ```bash
+   # Generate with figlet, then print
+   figlet -f standard "MILAN" | while IFS= read -r line; do python-escpos text --txt "$line"; done
+   ```
+   Or use the CLI's `set --width 2 --height 2` for built-in large text.
+
+4. **ASCII decorations** — Use characters like `*`, `~`, `.`, `=`, `#`, `@`, and Unicode box characters for visual variety:
+   ```bash
+   python-escpos text --txt "  *  *  *  *  *  *  *  *  *  *  *"
+   python-escpos text --txt "    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+   python-escpos text --txt "  ###############################"
+   ```
+
+5. **Whitespace as art** — Thermal printers respect leading spaces. Use indentation and spacing for visual rhythm, alignment, and emphasis. A blank line (`python-escpos text --txt " "`) creates vertical breathing room.
+
+6. **Compositions mixing art + data** — Combine ASCII borders, banner text, data (QR codes, barcodes), and images into a single composed piece. The CLI's stateful `set` command lets you mix alignment and sizes within one print job.
+
+### Design principles for thermal print art
+
+- **Less ink, more whitespace.** Thermal paper burns ink (dots) irreversibly. Dense ASCII blocks can cause paper curl or heat bleed. Favor sparse, high-contrast designs.
+- **Test with `dummy` printer first.** Use `type: dummy` in the config to preview output without wasting paper.
+- **Font A for art, Font B for density.** Font A is wider (better for ASCII art alignment); Font B is narrower (more characters per line, denser look).
+- **Avoid character values starting with `-`** — argparse in v3.1 misinterprets them as flags. For separators, use `=`, `.`, `*`, `~`, `#`, `_`, or `+` instead of dashes.
+- **Embrace the impermanence.** Receipt art is meant to be seen, smiled at, and discarded. Don't over-engineer; iterate fast and print often.
+
 ### Known Bugs in v3.1 (tested)
 
 | Command | Status | Issue | Workaround |
