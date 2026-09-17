@@ -29,6 +29,21 @@ It was built from the [context7 llms.txt](https://context7.com/python-escpos/pyt
 
 Tested on: **Epson TM-m30II** (USB `0x04b8:0x0e2a`), python-escpos 3.1, macOS 14.6.
 
+## Compatibility Matrix
+
+This table holds only what the README and `SKILL.md` already claim. "Not tested" means the repo documents the interface, but no print on hardware was confirmed.
+
+| Printer model | Interface | Result | Notes |
+|---|---|---|---|
+| Epson TM-m30II (`0x04b8:0x0e2a`) | USB (`usb`) | Working, tested | Tested on physical hardware with python-escpos 3.1 on macOS 14.6. This model has no capabilities profile, so use `profile: default`. |
+| Epson TM-m30II | CUPS (`cupsprinter`) or LP (`lp`) | Not tested | The skill documents a CUPS-listed `EPSON_TM_m30II` queue as usable even when the printer is offline. No print on this interface was confirmed. |
+| Epson TM-T20, TM-T88, TM-TIII series | Any (`usb`, `serial`, `network`) | Not tested | Named as target models. The capabilities DB has the profiles `TM-T20II`, `TM-T88II`, `TM-T88III`, `TM-T88IV`, `TM-T88V`. |
+| Star Micronics printers | Any | Not tested | Named as target models only. No profile and no test claim. |
+| Any ESC/POS printer | Dummy (`dummy`) | No output | Preview and test path without hardware. |
+| Any ESC/POS printer | Serial (`serial`), Network (`network`), File (`file`), Win32Raw (`win32raw`) | Not tested | Documented config types. No hardware test claim for these interfaces. |
+| Any ESC/POS printer | CLI commands `fullimage`, `demo`, `cashdraw --pin`, `set --text_type`, `charcode --code UTF8`, `software_columns` | Broken in v3.1 | Command level, not model level, so it applies to every printer. Details and workarounds: [Known Bugs in v3.1](#known-bugs-in-v31). |
+| Any ESC/POS printer | CLI commands `text`, `block_text`, `qr`, `barcode`, `image`, `cut`, `set` (without `--text_type`), `hw`, `control`, `panel_buttons`, `raw`, `charcode` (with `CP*` names), `version`, `version_extended` | Working | Confirmed on v3.1. |
+
 ## CLI Commands Covered
 
 | Command | Status | Description |
