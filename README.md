@@ -9,7 +9,7 @@ This skill teaches an AI agent (or serves as a human reference) how to:
 - **Install** python-escpos and its dependencies (pyusb, libusb, Pillow, etc.)
 - **Identify** a connected thermal printer (USB, serial, network, file, LP, CUPS, Win32Raw)
 - **Configure** a `config.yaml` file for any of the 8 supported printer types
-- **Print** text, barcodes, QR codes, images, and cut paper — all from the shell
+- **Print** text, barcodes, QR codes, images, and cut paper, all from the shell
 - **Troubleshoot** common issues and known bugs in v3.1
 
 It was built from the [context7 llms.txt](https://context7.com/python-escpos/python-escpos/llms.txt) documentation, verified against the actual CLI source code (`cli.py`), and **tested on physical hardware** (Epson TM-m30II, USB).
@@ -45,10 +45,10 @@ Tested on: **Epson TM-m30II** (USB `0x04b8:0x0e2a`), python-escpos 3.1, macOS 14
 | `panel_buttons` | ✅ Working | Enable/disable feed button |
 | `raw` | ✅ Working | Send raw ESC/POS bytes |
 | `charcode` | ✅ Working | Set character code page |
-| `fullimage` | ❌ Broken | KeyError in v3.1 — use `image` instead |
+| `fullimage` | ❌ Broken | KeyError in v3.1: use `image` instead |
 | `software_columns` | ❌ N/A | Not in v3.1 release |
 | `demo` | ❌ Broken | Argparse filtering bug crashes all modes |
-| `cashdraw` | ❌ Broken from CLI | Argparse type mismatch — use Python API |
+| `cashdraw` | ❌ Broken from CLI | Argparse type mismatch: use Python API |
 | `version` | ✅ Working | Print version |
 | `version_extended` | ✅ Working | Diagnostics + driver usability |
 
@@ -151,4 +151,4 @@ Copy `SKILL.md` into your skills directory following your harness's conventions.
 
 ## License
 
-MIT — same as python-escpos itself.
+MIT: same as python-escpos itself.
